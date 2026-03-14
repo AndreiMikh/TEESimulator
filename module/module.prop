@@ -1,6 +1,6 @@
 id=tricky_store
 name=TEE Simulator
-version=${REPLACEMEVER}
+version=v7.0.0
 versionCode=${REPLACEMEVERCODE}
 author=JingMatrix & Andrei
 description=Software Simulation for Android Hardware-Backed Key Pairs with Key Attestation

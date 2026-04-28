@@ -251,16 +251,18 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
                             ) ?: throw Exception("Failed to create overriding attest key pair.")
 
                         CertificateHelper.updateCertificateChain(
+                                callingUid,
                                 response.metadata,
                                 keyData.second.toTypedArray(),
                             )
                             .getOrThrow()
 
-                        keyDescriptor.nspace = SecureRandom().nextLong()
+                        val key = response.metadata.key!!
+                        key.nspace = SecureRandom().nextLong()
                         KeyMintSecurityLevelInterceptor.generatedKeys[keyId] =
                             KeyMintSecurityLevelInterceptor.GeneratedKeyInfo(
                                 keyData.first,
-                                keyDescriptor.nspace,
+                                key.nspace,
                                 response,
                             )
                         KeyMintSecurityLevelInterceptor.attestationKeys.add(keyId)
@@ -300,7 +302,11 @@ object Keystore2Interceptor : AbstractKeystoreInterceptor() {
                         SystemLogger.debug("Cached patched certificate chain for $keyId.")
                     }
 
-                    CertificateHelper.updateCertificateChain(response.metadata, finalChain)
+                    CertificateHelper.updateCertificateChain(
+                            callingUid,
+                            response.metadata,
+                            finalChain,
+                        )
                         .getOrThrow()
 
                     return InterceptorUtils.createTypedObjectReply(response)

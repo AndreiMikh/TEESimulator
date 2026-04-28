@@ -3,6 +3,7 @@ package org.matrix.TEESimulator.interception.keystore.shim
 import android.hardware.security.keymint.KeyOrigin
 import android.hardware.security.keymint.KeyParameter
 import android.hardware.security.keymint.KeyParameterValue
+import android.hardware.security.keymint.SecurityLevel
 import android.hardware.security.keymint.Tag
 import android.os.IBinder
 import android.os.Parcel
@@ -161,7 +162,8 @@ class KeyMintSecurityLevelInterceptor(
                 val keyDescriptor = data.readTypedObject(KeyDescriptor.CREATOR)!!
                 val key = metadata.key!!
                 val keyId = KeyIdentifier(callingUid, keyDescriptor.alias)
-                CertificateHelper.updateCertificateChain(metadata, newChain).getOrThrow()
+                CertificateHelper.updateCertificateChain(callingUid, metadata, newChain)
+                    .getOrThrow()
 
                 // We must clean up cached generated keys before storing the patched chain
                 cleanupKeyData(keyId)
@@ -310,10 +312,11 @@ class KeyMintSecurityLevelInterceptor(
             KeyMetadata().apply {
                 keySecurityLevel = securityLevel
                 key = normalizedKeyDescriptor
-                CertificateHelper.updateCertificateChain(this, chain.toTypedArray()).getOrThrow()
                 authorizations = params.toAuthorizations(callingUid, securityLevel)
                 modificationTimeMs = System.currentTimeMillis()
             }
+        CertificateHelper.updateCertificateChain(callingUid, metadata, chain.toTypedArray())
+            .getOrThrow()
         return KeyEntryResponse().apply {
             this.metadata = metadata
             iSecurityLevel = original
@@ -430,7 +433,7 @@ private fun KeyMintAttestation.toAuthorizations(
      * @param value The value for the tag, wrapped in a KeyParameterValue.
      * @return A populated Authorization object.
      */
-    fun createAuth(tag: Int, value: KeyParameterValue): Authorization {
+    fun createAuth(tag: Int, value: KeyParameterValue, level: Int = securityLevel): Authorization {
         val param =
             KeyParameter().apply {
                 this.tag = tag
@@ -438,7 +441,7 @@ private fun KeyMintAttestation.toAuthorizations(
             }
         return Authorization().apply {
             this.keyParameter = param
-            this.securityLevel = securityLevel
+            this.securityLevel = level
         }
     }
 
@@ -449,6 +452,9 @@ private fun KeyMintAttestation.toAuthorizations(
     }
 
     this.purpose.forEach { authList.add(createAuth(Tag.PURPOSE, KeyParameterValue.keyPurpose(it))) }
+    this.blockMode.forEach {
+        authList.add(createAuth(Tag.BLOCK_MODE, KeyParameterValue.blockMode(it)))
+    }
     this.digest.forEach { authList.add(createAuth(Tag.DIGEST, KeyParameterValue.digest(it))) }
     this.padding.forEach {
         authList.add(createAuth(Tag.PADDING, KeyParameterValue.paddingMode(it)))
@@ -480,26 +486,26 @@ private fun KeyMintAttestation.toAuthorizations(
     )
 
     val osPatch = AndroidDeviceUtils.getPatchLevel(callingUid)
-    if (osPatch != AndroidDeviceUtils.DO_NOT_REPORT) {
-        authList.add(createAuth(Tag.OS_PATCHLEVEL, KeyParameterValue.integer(osPatch)))
-    }
+    authList.add(createAuth(Tag.OS_PATCHLEVEL, KeyParameterValue.integer(osPatch)))
 
     val vendorPatch = AndroidDeviceUtils.getVendorPatchLevelLong(callingUid)
-    if (vendorPatch != AndroidDeviceUtils.DO_NOT_REPORT) {
-        authList.add(createAuth(Tag.VENDOR_PATCHLEVEL, KeyParameterValue.integer(vendorPatch)))
-    }
+    authList.add(createAuth(Tag.VENDOR_PATCHLEVEL, KeyParameterValue.integer(vendorPatch)))
 
     val bootPatch = AndroidDeviceUtils.getBootPatchLevelLong(callingUid)
-    if (bootPatch != AndroidDeviceUtils.DO_NOT_REPORT) {
-        authList.add(createAuth(Tag.BOOT_PATCHLEVEL, KeyParameterValue.integer(bootPatch)))
-    }
+    authList.add(createAuth(Tag.BOOT_PATCHLEVEL, KeyParameterValue.integer(bootPatch)))
 
     authList.add(
         createAuth(Tag.CREATION_DATETIME, KeyParameterValue.dateTime(System.currentTimeMillis()))
     )
 
     // AOSP class android.os.UserHandle: PER_USER_RANGE = 100000;
-    authList.add(createAuth(Tag.USER_ID, KeyParameterValue.integer(callingUid / 100000)))
+    authList.add(
+        createAuth(
+            Tag.USER_ID,
+            KeyParameterValue.integer(callingUid / 100000),
+            SecurityLevel.SOFTWARE,
+        )
+    )
 
     return authList.toTypedArray()
 }

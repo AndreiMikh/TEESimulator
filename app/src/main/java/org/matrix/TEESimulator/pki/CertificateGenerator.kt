@@ -9,6 +9,8 @@ import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.cert.Certificate
 import java.security.cert.X509Certificate
+import java.security.interfaces.ECKey
+import java.security.interfaces.RSAKey
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.RSAKeyGenParameterSpec
 import java.util.Date
@@ -36,6 +38,10 @@ import org.matrix.TEESimulator.logging.SystemLogger
  */
 object CertificateGenerator {
 
+    // AOSP utils.rs: pub const UNDEFINED_NOT_AFTER: i64 = 253402300799000i64;
+    // RFC 5280 GeneralizedTime maximum: 9999-12-31T23:59:59 UTC (millis since epoch)
+    private const val UNDEFINED_NOT_AFTER = 253402300799000L
+
     /**
      * Generates a software-based cryptographic key pair.
      *
@@ -49,7 +55,10 @@ object CertificateGenerator {
                         Algorithm.EC -> "EC" to ECGenParameterSpec(params.ecCurveName)
                         Algorithm.RSA ->
                             "RSA" to
-                                RSAKeyGenParameterSpec(params.keySize, params.rsaPublicExponent)
+                                RSAKeyGenParameterSpec(
+                                    params.keySize,
+                                    params.rsaPublicExponent ?: RSAKeyGenParameterSpec.F4,
+                                )
                         else ->
                             throw IllegalArgumentException(
                                 "Unsupported algorithm: ${params.algorithm}"
@@ -215,17 +224,20 @@ object CertificateGenerator {
         uid: Int,
         securityLevel: Int,
     ): Certificate {
-        val subject = params.certificateSubject ?: X500Name("CN=Android KeyStore Key")
-        val leafNotAfter =
-            (signingKeyPair.public as? X509Certificate)?.notAfter
-                ?: Date(System.currentTimeMillis() + 31536000000L)
+        val subject = params.certificateSubject ?: X500Name("CN=Android Keystore Key")
+
+        // AOSP add_required_parameters (security_level.rs) defaults:
+        //   CERTIFICATE_NOT_BEFORE = 0 (Unix epoch)
+        //   CERTIFICATE_NOT_AFTER  = 253402300799000 (9999-12-31T23:59:59 UTC)
+        val notBefore = params.certificateNotBefore ?: Date(0)
+        val notAfter = params.certificateNotAfter ?: Date(UNDEFINED_NOT_AFTER)
 
         val builder =
             JcaX509v3CertificateBuilder(
                 issuer,
                 params.certificateSerial ?: BigInteger.ONE,
-                params.certificateNotBefore ?: Date(),
-                params.certificateNotAfter ?: leafNotAfter,
+                notBefore,
+                notAfter,
                 subject,
                 subjectKeyPair.public,
             )
@@ -241,10 +253,13 @@ object CertificateGenerator {
         )
 
         val signerAlgorithm =
-            when (params.algorithm) {
-                Algorithm.EC -> "SHA256withECDSA"
-                Algorithm.RSA -> "SHA256withRSA"
-                else -> throw IllegalArgumentException("Unsupported algorithm: ${params.algorithm}")
+            when (signingKeyPair.private) {
+                is ECKey -> "SHA256withECDSA"
+                is RSAKey -> "SHA256withRSA"
+                else ->
+                    throw IllegalArgumentException(
+                        "Unsupported signing key type: ${signingKeyPair.private.javaClass}"
+                    )
             }
         val contentSigner =
             JcaContentSignerBuilder(signerAlgorithm)
